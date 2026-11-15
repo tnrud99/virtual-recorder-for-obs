@@ -82,6 +82,10 @@ jobs:
       - name: Install build dependencies
         run: |
           brew install simde
+          # FFmpeg's x86 assembly needs nasm; the arm64 build has none.
+          if [[ "$MACOS_ARCHITECTURE" == "x86_64" ]]; then
+            brew install nasm
+          fi
 
       - name: Install OBS-matched Qt
         run: |
