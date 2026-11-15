@@ -38,24 +38,22 @@ Keep the `_reaction` video and the `_sync.json` file together.
 ### Windows
 
 1. Quit OBS Studio.
-2. Extract the downloaded ZIP (right-click > **Extract All**).
-3. Double-click **Install-Windows.bat**.
-4. If Windows asks "Do you want to allow this app to make changes?", click
-   **Yes**. The publisher may show as unknown; administrator permission is
-   needed to copy files into `C:\ProgramData`.
-5. Wait for "Installation complete", then press any key to close the window.
-6. Open OBS Studio. If the dock is hidden, choose **Tools > Open Virtual Recorder**.
+2. Extract the downloaded ZIP (right-click > **Extract All**). The `.bat`
+   file does not work from inside the ZIP.
+3. In the extracted folder, double-click **Install-Windows.bat**. If Windows
+   asks to allow changes, click **Yes** (copying into `C:\ProgramData` needs
+   administrator permission).
+4. Open OBS Studio. If the dock is hidden, choose **Tools > Open Virtual Recorder**.
 
-**If you would rather not run the `.bat` file**, copy the `virtuedit-obs`
-folder from the extracted ZIP into `C:\ProgramData\obs-studio\plugins\`
-(create the `plugins` folder if it does not exist), then open OBS Studio.
-The `.bat` file only copies files; you can open it in Notepad to check.
+If a blue "Windows protected your PC" screen appears, click **More info**,
+then **Run anyway**. It appears because the file is new and not yet widely
+downloaded. To confirm the file is unchanged, compare its SHA-256 hash with
+the one on the download page.
 
-If Windows shows a blue "Windows protected your PC" screen, click
-**More info** first; a **Run anyway** button then appears. This screen
-appears because the file is new and not yet widely downloaded. You can
-compare the file's SHA-256 hash with the one on the download page to confirm
-the file is unchanged.
+**Prefer not to run the `.bat` file?** It only copies one folder (open it in
+Notepad to check). Quit OBS, copy the `virtuedit-obs` folder into
+`C:\ProgramData\obs-studio\plugins\` (create `plugins` if it is missing), then
+open OBS Studio.
 
 ## Use
 
