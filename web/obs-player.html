@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VirtuEdit OBS Player</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; }
+        #youtube-player { width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="youtube-player"></div>
+
+    <script src="https://www.youtube.com/iframe_api"></script>
+
+    <script>
+        // --- URL params ---
+        const params = new URLSearchParams(window.location.search);
+        let currentVideoId = params.get('v') || '';
+        const wsPort = params.get('wsPort') || '0';
+        const sessionToken = params.get('token') || '';
+        const PLAYER_VERSION = '2026-06-24-recording-session-v1';
+        const producerId = makeProducerId();
+
+        // --- Tuning constants (ported from recorder.js) ---
+        const PAUSED_SEEK_THRESHOLD_SEC = 0.4;   // jump >0.4s while paused = seek
+        const PAUSED_SEEK_DEBOUNCE_MS = 400;     // wait for drag to settle
+        const SEEK_HOLD_PLAY_DURATION_SEC = 0.1; // synthetic play->pause gap
+        const SEEK_PAIR_YT_OFFSET_SEC = 1.2;     // makes end frame deterministic
+        const SEEK_POLL_INTERVAL_MS = 200;
+        const PLAYING_SEEK_THRESHOLD_SEC = 1.0;  // playing re-fire beyond 1x drift = seek
+        const MIN_GAP_AFTER_PREV_SYNC_POINT = 0.0001;
+        const SYNTHETIC_PAUSE_BEFORE_END_EPS = 0.001;
+
+        // --- State ---
+        let player = null;
+        let ws = null;
+        let youtubeReady = false;
+        let isRecording = false;
+        let activeRecordingId = null;
+        let recordingStartTime = 0;
+        let youtubeFirstPlayTime = null;
+
+        // Local mirror of sync_points — needed so seek detection can reference
+        // the previous point (the plugin also accumulates its own copy via WS).
+        let syncPoints = [];
+
+        // Paused-seek polling state
+        let seekPollTimer = null;
+        let lastPausedYoutubeTime = null;
+        let pendingSeekTarget = null;
+        let pendingSeekSince = 0;
+        let readyReportTimer = null;
+
+        // Volume sync — report native YouTube volume changes back to the plugin
+        let lastReportedVolume = -1;
+
+        // --- WebSocket ---
+        function connectWebSocket() {
+            if (wsPort === '0') return;
+
+            ws = new WebSocket('ws://localhost:' + wsPort);
+
+            ws.onopen = function () {
+                send('connected', { videoId: currentVideoId });
+                scheduleReadyReport();
+            };
+
+            ws.onmessage = function (msg) {
+                let cmd;
+                try { cmd = JSON.parse(msg.data); } catch (e) { return; }
+                handleCommand(cmd);
+            };
+
+            ws.onclose = function () {
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onerror = function () {
+                ws.close();
+            };
+        }
+
+        function send(event, data) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const base = {
+                event: event,
+                token: sessionToken,
+                player_version: PLAYER_VERSION,
+                producer_id: producerId
+            };
+            if (activeRecordingId !== null) {
+                base.recording_id = activeRecordingId;
+            }
+            ws.send(JSON.stringify(Object.assign(base, data || {})));
+        }
+
+        function playerDuration() {
+            try {
+                const duration = player && typeof player.getDuration === 'function'
+                    ? Number(player.getDuration())
+                    : 0;
+                return Number.isFinite(duration) && duration >= 0 ? duration : 0;
+            } catch (e) {
+                return 0;
+            }
+        }
+
+        function playerTitle() {
+            try {
+                const data = player && typeof player.getVideoData === 'function'
+                    ? player.getVideoData()
+                    : null;
+                return data && data.title ? data.title : '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function playerState() {
+            try {
+                return player && typeof player.getPlayerState === 'function'
+                    ? player.getPlayerState()
+                    : -1;
+            } catch (e) {
+                return -1;
+            }
+        }
+
+        function playerTime() {
+            try {
+                const time = player && typeof player.getCurrentTime === 'function'
+                    ? Number(player.getCurrentTime())
+                    : 0;
+                return Number.isFinite(time) && time >= 0 ? time : 0;
+            } catch (e) {
+                return 0;
+            }
+        }
+
+        function reportPlayerReady() {
+            if (!player || !currentVideoId) return;
+            send('player_ready', {
+                videoId: currentVideoId,
+                title: playerTitle(),
+                duration: playerDuration()
+            });
+        }
+
+        function reportPlayerState(stateOverride) {
+            if (!player || !currentVideoId) return;
+            send('state_change', {
+                videoId: currentVideoId,
+                state: Number.isFinite(Number(stateOverride)) ? Number(stateOverride) : playerState(),
+                youtube_time: playerTime(),
+                duration: playerDuration()
+            });
+        }
+
+        function scheduleReadyReport() {
+            if (readyReportTimer) {
+                clearInterval(readyReportTimer);
+                readyReportTimer = null;
+            }
+
+            let attempts = 0;
+            const tick = function () {
+                attempts++;
+                reportPlayerReady();
+                reportPlayerState();
+                if (playerDuration() > 0 || playerTitle() || attempts >= 20) {
+                    if (readyReportTimer) {
+                        clearInterval(readyReportTimer);
+                        readyReportTimer = null;
+                    }
+                    return true;
+                }
+                return false;
+            };
+
+            if (!tick()) {
+                readyReportTimer = setInterval(tick, 500);
+            }
+        }
+
+        function makeProducerId() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+            return String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+        }
+
+        function commandRecordingId(cmd) {
+            const id = Number(cmd && cmd.recording_id);
+            return Number.isFinite(id) && id >= 0 ? id : null;
+        }
+
+        // --- Plugin commands ---
+        function handleCommand(cmd) {
+            switch (cmd.action) {
+                case 'load':
+                    loadVideo(cmd.videoId);
+                    break;
+                case 'play':
+                    if (player) player.playVideo();
+                    break;
+                case 'pause':
+                    if (player) player.pauseVideo();
+                    break;
+                case 'seek':
+                    if (player) player.seekTo(cmd.time, true);
+                    break;
+                case 'setVolume':
+                    if (player) {
+                        player.setVolume(cmd.volume);
+                        // Suppress the echo report for our own change
+                        lastReportedVolume = Math.round(cmd.volume);
+                    }
+                    break;
+                case 'startRecording':
+                    startRecording(commandRecordingId(cmd));
+                    break;
+                case 'stopRecording':
+                    stopRecording(commandRecordingId(cmd));
+                    break;
+                case 'resetRecording':
+                    resetRecordingState(commandRecordingId(cmd));
+                    break;
+            }
+        }
+
+        // Also listen for CustomEvent from OBS proc_handler "javascript_event"
+        window.addEventListener('vtCommand', function (e) {
+            let cmd;
+            try { cmd = JSON.parse(e.detail); } catch (ex) { return; }
+            handleCommand(cmd);
+        });
+
+        // --- YouTube Player ---
+        function loadVideo(id) {
+            currentVideoId = id || '';
+            youtubeReady = false;
+            if (player && id) {
+                player.loadVideoById(id);
+                scheduleReadyReport();
+            }
+        }
+
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('youtube-player', {
+                videoId: currentVideoId,
+                playerVars: {
+                    autoplay: 0,
+                    controls: 1,
+                    modestbranding: 1,
+                    rel: 0,
+                    fs: 0
+                },
+                events: {
+                    onReady: onPlayerReady,
+                    onStateChange: onPlayerStateChange,
+                    onError: onPlayerError
+                }
+            });
+        }
+
+        // YouTube error codes: 2 invalid id, 5 HTML5 error,
+        // 100 not found/private, 101 & 150 embedding disabled by owner.
+        function onPlayerError(e) {
+            send('player_error', {
+                videoId: currentVideoId,
+                code: e && e.data
+            });
+        }
+
+        function onPlayerReady() {
+            youtubeReady = true;
+            scheduleReadyReport();
+        }
+
+        // --- Recording control ---
+        function resetRecordingState(recordingId) {
+            if (seekPollTimer) { clearInterval(seekPollTimer); seekPollTimer = null; }
+            isRecording = false;
+            activeRecordingId = recordingId;
+            recordingStartTime = 0;
+            youtubeFirstPlayTime = null;
+            syncPoints = [];
+            lastPausedYoutubeTime = null;
+            pendingSeekTarget = null;
+            pendingSeekSince = 0;
+        }
+
+        function startRecording(recordingId) {
+            if (isRecording && activeRecordingId === recordingId) {
+                return; // prevent double-init from WS + proc_handler
+            }
+            resetRecordingState(recordingId);
+            isRecording = true;
+            recordingStartTime = Date.now();
+
+            // Start paused-seek polling (the only way to catch eventless paused seeks)
+            seekPollTimer = setInterval(pollPausedSeek, SEEK_POLL_INTERVAL_MS);
+
+            addTimestamp('start');
+
+            // If YouTube is already playing, inject youtube_play immediately.
+            // The IFrame API doesn't fire stateChange for an already-PLAYING video,
+            // so without this the first pause becomes an orphan.
+            try {
+                if (player && typeof player.getPlayerState === 'function' &&
+                    player.getPlayerState() === YT.PlayerState.PLAYING) {
+                    if (youtubeFirstPlayTime === null) {
+                        youtubeFirstPlayTime = getElapsedSeconds();
+                    }
+                    addTimestamp('youtube_play');
+                }
+            } catch (e) { /* player not ready */ }
+
+            send('recording_started', {});
+        }
+
+        function stopRecording(recordingId) {
+            if (!isRecording) return;
+            if (activeRecordingId !== null && recordingId !== null &&
+                activeRecordingId !== recordingId) {
+                return;
+            }
+
+            if (seekPollTimer) { clearInterval(seekPollTimer); seekPollTimer = null; }
+
+            maybeAddSyntheticPauseBeforeEnd();
+            addTimestamp('end');
+            isRecording = false;
+
+            // Pause YouTube now that recording stopped (guarded by isRecording=false
+            // so it won't be recorded as a sync_point).
+            try {
+                if (player && typeof player.pauseVideo === 'function' &&
+                    player.getPlayerState() === YT.PlayerState.PLAYING) {
+                    player.pauseVideo();
+                }
+            } catch (e) { /* player not ready */ }
+
+            send('recording_stopped', {
+                videoId: currentVideoId,
+                count: syncPoints.length
+            });
+            activeRecordingId = null;
+            recordingStartTime = 0;
+        }
+
+        // --- YouTube state change ---
+        function onPlayerStateChange(event) {
+            // Always report state to plugin (for UI)
+            reportPlayerState(event.data);
+            if (!youtubeReady || playerDuration() > 0) {
+                youtubeReady = true;
+                scheduleReadyReport();
+            }
+
+            if (!isRecording) return;
+
+            // Duplicate suppression: YouTube re-emits PLAYING/PAUSED without a
+            // matching opposite event after buffering/quality-change/seek. If kept,
+            // the editor's play->pause pairing breaks and a block disappears.
+            const lastPoint = syncPoints.length ? syncPoints[syncPoints.length - 1] : null;
+            const isDuplicate = (e) => lastPoint && lastPoint.event === e;
+
+            switch (event.data) {
+                case YT.PlayerState.PLAYING:
+                    if (youtubeFirstPlayTime === null) {
+                        youtubeFirstPlayTime = getElapsedSeconds();
+                    }
+                    if (isDuplicate('youtube_play')) {
+                        // play re-fired without a pause = seek-during-play or net resume
+                        maybeRecordPlayingSeek(lastPoint, player.getCurrentTime());
+                        break;
+                    }
+                    addTimestamp('youtube_play');
+                    break;
+
+                case YT.PlayerState.PAUSED:
+                    if (isDuplicate('youtube_pause') || isDuplicate('youtube_ended')) break;
+                    addTimestamp('youtube_pause');
+                    break;
+
+                case YT.PlayerState.ENDED:
+                    if (isDuplicate('youtube_ended') || isDuplicate('youtube_pause')) break;
+                    addTimestamp('youtube_ended');
+                    break;
+            }
+        }
+
+        // --- Paused-seek polling ---
+        // While paused, if getCurrentTime() jumps past the threshold the host
+        // dragged the scrubber to show a frame. Debounce until it settles, then
+        // record as a synthetic play+pause pair. PAUSED-only, so play/buffering/ad
+        // segments are naturally excluded.
+        function pollPausedSeek() {
+            if (!isRecording) return;
+            const p = player;
+            if (!p || typeof p.getPlayerState !== 'function' ||
+                typeof p.getCurrentTime !== 'function') return;
+
+            let state, t;
+            try {
+                state = p.getPlayerState();
+                if (state !== YT.PlayerState.PAUSED) {
+                    lastPausedYoutubeTime = null;
+                    pendingSeekTarget = null;
+                    return;
+                }
+                t = p.getCurrentTime();
+            } catch (e) { return; }
+
+            if (typeof t !== 'number' || !isFinite(t)) return;
+
+            if (lastPausedYoutubeTime === null) {
+                lastPausedYoutubeTime = t;
+                return;
+            }
+            if (Math.abs(t - lastPausedYoutubeTime) <= PAUSED_SEEK_THRESHOLD_SEC) return;
+
+            // seek in progress — debounce until the position stabilizes
+            if (pendingSeekTarget === null || Math.abs(t - pendingSeekTarget) > 0.05) {
+                pendingSeekTarget = t;
+                pendingSeekSince = Date.now();
+                return;
+            }
+            if (Date.now() - pendingSeekSince >= PAUSED_SEEK_DEBOUNCE_MS) {
+                recordPausedSeek(pendingSeekTarget);
+                lastPausedYoutubeTime = pendingSeekTarget;
+                pendingSeekTarget = null;
+            }
+        }
+
+        // Encode a paused seek as a synthetic youtube_play + youtube_pause pair.
+        // play/pause are different event types, so they bypass consumers' "drop
+        // consecutive identical events" dedup — letting a still frame show without
+        // any editor/viewer changes.
+        function recordPausedSeek(ytTime) {
+            if (!isRecording) return;
+            let playRt = getElapsedSeconds();
+            const prev = syncPoints.length ? syncPoints[syncPoints.length - 1] : null;
+            if (prev && typeof prev.reaction_time === 'number' && playRt <= prev.reaction_time) {
+                playRt = prev.reaction_time + MIN_GAP_AFTER_PREV_SYNC_POINT;
+            }
+            const pauseRt = playRt + SEEK_HOLD_PLAY_DURATION_SEC;
+
+            if (youtubeFirstPlayTime === null) {
+                youtubeFirstPlayTime = playRt;
+            }
+
+            // play.yt placed 1.2s BEFORE pause.yt so the viewer always picks
+            // seek_then_pause → lands exactly on ytTime (deterministic end frame).
+            const playYt = Math.max(0, ytTime - SEEK_PAIR_YT_OFFSET_SEC);
+
+            pushPoint({
+                reaction_time: playRt,
+                youtube_time: playYt,
+                relative_youtube_time: playYt,
+                event: 'youtube_play',
+                youtube_first_play_time: youtubeFirstPlayTime
+            });
+            pushPoint({
+                reaction_time: pauseRt,
+                youtube_time: ytTime,
+                relative_youtube_time: ytTime,
+                event: 'youtube_pause',
+                youtube_first_play_time: youtubeFirstPlayTime
+            });
+        }
+
+        // Detect a seek that happened DURING playback (PLAYING re-fired). Compare
+        // the actual currentTime against the 1x-expected position since the last
+        // play; if off by more than the threshold it's a seek → encode as
+        // pause(pre-jump) + play(post-jump).
+        function maybeRecordPlayingSeek(lastPlayPoint, newCt) {
+            if (!isRecording) return;
+            if (!lastPlayPoint || lastPlayPoint.event !== 'youtube_play') return;
+            const baseYt = Number(lastPlayPoint.relative_youtube_time);
+            const baseRt = Number(lastPlayPoint.reaction_time);
+            if (!isFinite(baseYt) || !isFinite(baseRt) ||
+                typeof newCt !== 'number' || !isFinite(newCt)) return;
+
+            const nowRt = getElapsedSeconds();
+            const expectedCt = baseYt + (nowRt - baseRt);
+
+            if (Math.abs(newCt - expectedCt) <= PLAYING_SEEK_THRESHOLD_SEC) {
+                // network resume at ~same position, not a seek → ignore
+                return;
+            }
+
+            let pauseRt = nowRt;
+            const prev = syncPoints.length ? syncPoints[syncPoints.length - 1] : null;
+            if (prev && typeof prev.reaction_time === 'number' && pauseRt <= prev.reaction_time) {
+                pauseRt = prev.reaction_time + MIN_GAP_AFTER_PREV_SYNC_POINT;
+            }
+            const playRt = pauseRt + SEEK_HOLD_PLAY_DURATION_SEC;
+            const pauseYt = Math.max(0, expectedCt);
+
+            pushPoint({
+                reaction_time: pauseRt,
+                youtube_time: pauseYt,
+                relative_youtube_time: pauseYt,
+                event: 'youtube_pause',
+                youtube_first_play_time: youtubeFirstPlayTime
+            });
+            pushPoint({
+                reaction_time: playRt,
+                youtube_time: newCt,
+                relative_youtube_time: newCt,
+                event: 'youtube_play',
+                youtube_first_play_time: youtubeFirstPlayTime
+            });
+        }
+
+        // If YouTube is still playing when recording stops, insert a synthetic
+        // youtube_pause so the editor's play-pause block pairing doesn't break.
+        function maybeAddSyntheticPauseBeforeEnd() {
+            if (!player || typeof player.getPlayerState !== 'function') return;
+            if (player.getPlayerState() !== YT.PlayerState.PLAYING) return;
+            const last = syncPoints.length ? syncPoints[syncPoints.length - 1] : null;
+            if (last && last.event === 'youtube_pause') return;
+
+            let youtubeTime = (youtubeFirstPlayTime !== null && youtubeReady)
+                ? player.getCurrentTime() : null;
+            let reactionTime = getElapsedSeconds() - SYNTHETIC_PAUSE_BEFORE_END_EPS;
+            if (last && typeof last.reaction_time === 'number' &&
+                reactionTime <= last.reaction_time) {
+                reactionTime = last.reaction_time + MIN_GAP_AFTER_PREV_SYNC_POINT;
+            }
+            if (reactionTime < 0) reactionTime = 0;
+
+            pushPoint({
+                reaction_time: reactionTime,
+                youtube_time: youtubeTime,
+                relative_youtube_time: youtubeTime,
+                event: 'youtube_pause',
+                youtube_first_play_time: youtubeFirstPlayTime
+            });
+        }
+
+        // --- Timestamp helpers ---
+        function getElapsedSeconds() {
+            if (recordingStartTime === 0) return 0;
+            return Math.max(0, (Date.now() - recordingStartTime) / 1000);
+        }
+
+        // Append to local mirror + forward to plugin over WS.
+        // Note: 'event' is renamed to 'sync_event' on the wire to avoid colliding
+        // with the WS envelope's own 'event' field.
+        function pushPoint(point) {
+            syncPoints.push(point);
+            send('timestamp', {
+                videoId: currentVideoId,
+                reaction_time: point.reaction_time,
+                youtube_time: point.youtube_time,
+                relative_youtube_time: point.relative_youtube_time,
+                sync_event: point.event,
+                youtube_first_play_time: point.youtube_first_play_time
+            });
+        }
+
+        function addTimestamp(eventName) {
+            let youtubeTime = null;
+            if (eventName !== 'start' && youtubeFirstPlayTime !== null &&
+                youtubeReady && player) {
+                youtubeTime = player.getCurrentTime();
+            }
+            pushPoint({
+                reaction_time: getElapsedSeconds(),
+                youtube_time: youtubeTime,
+                relative_youtube_time: youtubeTime,
+                event: eventName,
+                youtube_first_play_time: youtubeFirstPlayTime
+            });
+        }
+
+        // --- Volume sync ---
+        // Poll the player volume so changes made via YouTube's own UI (in the
+        // OBS interaction window) propagate back to the dock slider + JSON.
+        function pollVolume() {
+            if (!player || typeof player.getVolume !== 'function') return;
+            let v;
+            try { v = Math.round(player.getVolume()); } catch (e) { return; }
+            if (typeof v !== 'number' || !isFinite(v)) return;
+            if (lastReportedVolume === -1) { lastReportedVolume = v; return; }
+            if (Math.abs(v - lastReportedVolume) >= 1) {
+                lastReportedVolume = v;
+                send('volume_change', { videoId: currentVideoId, volume: v });
+            }
+        }
+        setInterval(pollVolume, 400);
+
+        // --- Init ---
+        connectWebSocket();
+    </script>
+</body>
+</html>

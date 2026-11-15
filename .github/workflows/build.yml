@@ -1,0 +1,284 @@
+name: Build OBS Plugin
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        type: choice
+        default: all
+        options: [all, macos, windows]
+
+permissions:
+  contents: read
+
+jobs:
+  check-obs-version:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify pinned OBS is latest stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pinned="$(jq -r '.dependencies["obs-studio"].version' buildspec.json)"
+          latest="$(gh api repos/obsproject/obs-studio/releases/latest --jq .tag_name)"
+          test -n "$pinned"
+          test "$pinned" = "$latest" || {
+            echo "Pinned OBS $pinned is not the latest stable OBS $latest."
+            echo "Verify compatibility, then update all release pins and checksums."
+            exit 1
+          }
+
+  build-macos:
+    if: github.event_name != 'schedule' && inputs.platform != 'windows'
+    runs-on: macos-15
+    env:
+      OBS_VERSION: 32.1.2
+      OBS_MACOS_SHA256: 2aeb3aaa99544fefd557f10ac6550e73df71540dd57528b2a1e6f39a55ebacfb
+      OBS_DEPS_VERSION: 2025-08-23
+      OBS_QT_MACOS_SHA256: ed70bb04a5ffc4c820d691e7f1d9913462bc4e018383e98c5548876f6dec0304
+      MACOS_DEPLOYMENT_TARGET: 12.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned OBS Studio
+        run: |
+          obs_dmg="$RUNNER_TEMP/obs-studio.dmg"
+          mount_dir="$RUNNER_TEMP/obs-volume"
+          curl -fL \
+            "https://github.com/obsproject/obs-studio/releases/download/$OBS_VERSION/OBS-Studio-$OBS_VERSION-macOS-Apple.dmg" \
+            -o "$obs_dmg"
+          echo "$OBS_MACOS_SHA256  $obs_dmg" | shasum -a 256 -c -
+          mkdir -p "$mount_dir"
+          hdiutil attach "$obs_dmg" -nobrowse -quiet -mountpoint "$mount_dir"
+          sudo ditto "$mount_dir/OBS.app" /Applications/OBS.app
+          hdiutil detach "$mount_dir" -quiet
+
+      - name: Install build dependencies
+        run: |
+          brew install simde
+
+      - name: Install OBS-matched Qt
+        run: |
+          qt_archive="$RUNNER_TEMP/obs-qt.tar.xz"
+          qt_prefix="$RUNNER_TEMP/obs-qt"
+          curl -fL \
+            "https://github.com/obsproject/obs-deps/releases/download/$OBS_DEPS_VERSION/macos-deps-qt6-$OBS_DEPS_VERSION-arm64.tar.xz" \
+            -o "$qt_archive"
+          echo "$OBS_QT_MACOS_SHA256  $qt_archive" | shasum -a 256 -c -
+          mkdir -p "$qt_prefix"
+          tar -xJf "$qt_archive" -C "$qt_prefix"
+          test -f "$qt_prefix/lib/cmake/Qt6/Qt6Config.cmake"
+          echo "QT_PREFIX=$qt_prefix" >> "$GITHUB_ENV"
+
+      - name: Fetch OBS headers
+        run: |
+          git clone --depth 1 --branch "$OBS_VERSION" \
+            https://github.com/obsproject/obs-studio.git \
+            "/tmp/obs-studio-$OBS_VERSION"
+
+      - name: Build
+        run: |
+          scripts/build-macos.sh
+
+      - name: Run C++ tests
+        run: |
+          ctest --test-dir build --output-on-failure
+
+      - name: Validate JSON contract
+        run: |
+          node tests/validate-obs-sync-json.mjs tests/fixtures/*.json
+
+      - name: Build LGPL FFmpeg
+        run: |
+          scripts/build-ffmpeg-lgpl.sh
+
+      - name: Package macOS ZIP
+        run: |
+          SKIP_BUILD=1 scripts/package-macos.sh
+
+      - name: Verify macOS ZIP layout
+        run: |
+          CHECK_MAC_ZIP=1 CHECK_WINDOWS_ZIP=0 scripts/verify-release-archives.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VirtuEdit-OBS-Plugin-macOS-arm64
+          path: release/macos/VirtuEdit-OBS-Plugin-macOS-arm64.zip
+
+  build-windows:
+    if: github.event_name != 'schedule' && inputs.platform != 'macos'
+    runs-on: windows-2022
+    env:
+      OBS_VERSION: 32.1.2
+      OBS_DEPS_VERSION: 2025-08-23
+      OBS_WINDOWS_SHA256: 8d97e4563bd8d22d03e63042aa7dccede1d555c9bd35ce8a9e5019b0d0201bf6
+      OBS_QT_WINDOWS_SHA256: c62e82483bc7c0bf199e8ac3220c66a85a6e8a0cd69a05b6d44f873b830e415f
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 for FFmpeg
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            curl
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+
+      - name: Build LGPL FFmpeg
+        shell: msys2 {0}
+        run: bash scripts/build-ffmpeg-lgpl.sh
+
+      - name: Verify standalone FFmpeg
+        shell: pwsh
+        run: |
+          $ffmpeg = (Resolve-Path "build/ffmpeg-dist-windows-x64/bin/ffmpeg.exe").Path
+          $version = & $ffmpeg -version
+          if ($LASTEXITCODE -ne 0 -or ($version -join " ") -notmatch '--disable-gpl') {
+            throw "The bundled FFmpeg did not run as a standalone LGPL executable."
+          }
+          $remux = Join-Path $env:RUNNER_TEMP "recorder-remux.mp4"
+          & $ffmpeg -v error -i tests/fixtures/recorder-remux.mkv -c copy -movflags +faststart $remux
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path $remux)) {
+            throw "The bundled FFmpeg could not remux the H.264/AAC test recording."
+          }
+          "FFMPEG_EXE=$ffmpeg" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install OBS-matched Qt
+        shell: pwsh
+        run: |
+          $qtArchive = "$env:RUNNER_TEMP\obs-qt.zip"
+          $qtPrefix = "$env:RUNNER_TEMP\obs-qt"
+          $qtUrl = "https://github.com/obsproject/obs-deps/releases/download/${env:OBS_DEPS_VERSION}/windows-deps-qt6-${env:OBS_DEPS_VERSION}-x64.zip"
+          Invoke-WebRequest -Uri $qtUrl -OutFile $qtArchive
+          $actualHash = (Get-FileHash $qtArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:OBS_QT_WINDOWS_SHA256) {
+            throw "Qt Windows SHA-256 mismatch: $actualHash"
+          }
+          Expand-Archive $qtArchive -DestinationPath $qtPrefix
+          if (!(Test-Path "$qtPrefix\lib\cmake\Qt6\Qt6Config.cmake")) {
+            throw "Qt6Config.cmake was not found in the OBS Qt package."
+          }
+          "QT_PREFIX=$qtPrefix" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Fetch OBS headers
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:OBS_VERSION https://github.com/obsproject/obs-studio.git "$env:RUNNER_TEMP\obs-studio-$env:OBS_VERSION"
+
+      - name: Fetch SIMDe headers
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch v0.8.2 https://github.com/simd-everywhere/simde.git "$env:RUNNER_TEMP\simde"
+
+      - name: Download OBS Windows runtime
+        shell: pwsh
+        run: |
+          $obsUrl = "https://github.com/obsproject/obs-studio/releases/download/${env:OBS_VERSION}/OBS-Studio-${env:OBS_VERSION}-Windows-x64.zip"
+          Invoke-WebRequest -Uri $obsUrl -OutFile "$env:RUNNER_TEMP\obs-windows.zip"
+          $actualHash = (Get-FileHash "$env:RUNNER_TEMP\obs-windows.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $env:OBS_WINDOWS_SHA256) {
+            throw "OBS Windows SHA-256 mismatch: $actualHash"
+          }
+          Expand-Archive "$env:RUNNER_TEMP\obs-windows.zip" -DestinationPath "$env:RUNNER_TEMP\obs-windows"
+
+      - name: Create OBS import libraries
+        shell: pwsh
+        run: |
+          $obsRuntime = "$env:RUNNER_TEMP\obs-windows"
+          $libDir = "$env:RUNNER_TEMP\obs-import-libs"
+          scripts/make-windows-import-lib.ps1 `
+            -DllPath "$obsRuntime\bin\64bit\obs.dll" `
+            -OutputLib "$libDir\obs.lib" `
+            -LibraryName "obs"
+          scripts/make-windows-import-lib.ps1 `
+            -DllPath "$obsRuntime\bin\64bit\obs-frontend-api.dll" `
+            -OutputLib "$libDir\obs-frontend-api.lib" `
+            -LibraryName "obs-frontend-api"
+
+      - name: Build Windows plugin
+        shell: pwsh
+        run: |
+          $env:OBS_SOURCE_DIR = "$env:RUNNER_TEMP\obs-studio-$env:OBS_VERSION"
+          $env:OBS_LIB_DIR = "$env:RUNNER_TEMP\obs-import-libs"
+          $env:SIMDE_INCLUDE_DIR = "$env:RUNNER_TEMP\simde"
+          $qtPrefix = @($env:QT_PREFIX, $env:QT_ROOT_DIR, $env:Qt6_DIR, $env:QT_DIR) |
+            Where-Object { $_ -and (Test-Path $_) } |
+            Select-Object -First 1
+          if (!$qtPrefix) {
+            throw "Qt install path was not found in QT_PREFIX, QT_ROOT_DIR, Qt6_DIR, or QT_DIR."
+          }
+          $env:CMAKE_PREFIX_PATH = $qtPrefix
+          scripts/build-windows.ps1 -BuildDir build-windows -Configuration Release
+
+      - name: Run C++ tests
+        shell: pwsh
+        run: |
+          ctest --test-dir build-windows -C Release --output-on-failure
+
+      - name: Validate JSON contract
+        shell: pwsh
+        run: |
+          $fixtures = Get-ChildItem tests/fixtures -Filter *.json | ForEach-Object { $_.FullName }
+          node tests/validate-obs-sync-json.mjs $fixtures
+
+      - name: Package Windows ZIP
+        shell: pwsh
+        run: |
+          scripts/package-windows.ps1 `
+            -BuildDir build-windows `
+            -Configuration Release `
+            -PackageRoot release/windows `
+            -ZipPath release/VirtuEdit-OBS-Plugin-Windows-x64.zip `
+            -FfmpegExe "$env:FFMPEG_EXE"
+
+      - name: Verify Windows ZIP layout
+        shell: pwsh
+        run: |
+          $extractDir = Join-Path $env:RUNNER_TEMP "virtuedit-windows-package"
+          if (Test-Path $extractDir) {
+            Remove-Item -Recurse -Force $extractDir
+          }
+          Expand-Archive release/VirtuEdit-OBS-Plugin-Windows-x64.zip -DestinationPath $extractDir
+          $requiredRootFiles = @(
+            "Install-Windows.bat",
+            "Uninstall-Windows.bat",
+            "How to Install.txt",
+            "virtuedit-obs/LICENSE.txt",
+            "virtuedit-obs/THIRD_PARTY_LICENSES.txt",
+            "virtuedit-obs/SOURCE_CODE.txt",
+            "virtuedit-obs/licenses/LGPL-2.1.txt",
+            "virtuedit-obs/licenses/LGPL-3.0.txt"
+          )
+          foreach ($file in $requiredRootFiles) {
+            $path = Join-Path $extractDir $file
+            if (!(Test-Path $path)) {
+              throw "Windows ZIP is missing $file"
+            }
+          }
+          & scripts/verify-windows-install.ps1 `
+            -PluginDir (Join-Path $extractDir "virtuedit-obs")
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VirtuEdit-OBS-Plugin-Windows-x64
+          path: release/VirtuEdit-OBS-Plugin-Windows-x64.zip

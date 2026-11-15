@@ -1,0 +1,22 @@
+{
+    "name": "virtuedit-obs",
+    "version": "1.0.0",
+    "author": "VirtuEdit",
+    "website": "https://virtuedit.com",
+    "email": "",
+    "uuids": {
+        "macos": "com.virtuedit.obs-plugin",
+        "windows": "com.virtuedit.obs-plugin"
+    },
+    "dependencies": {
+        "obs-studio": {
+            "version": "32.1.2",
+            "repository": "https://github.com/obsproject/obs-studio"
+        }
+    },
+    "platform_config": {
+        "macos": {
+            "bundleId": "com.virtuedit.obs-plugin"
+        }
+    }
+}

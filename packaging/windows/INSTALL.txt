@@ -1,0 +1,88 @@
+Virtual Recorder for OBS - How to Install (Windows)
+====================================================
+
+Requires OBS Studio 32.1.2 and Windows 10/11 (64-bit).
+
+
+Install (easy way)
+------------------
+
+1. Quit OBS Studio completely.
+2. Extract the ZIP file (right-click > Extract All).
+3. Double-click Install-Windows.bat.
+4. If Windows asks "Do you want to allow this app to make changes?",
+   click Yes. The publisher may show as unknown. Administrator permission
+   is needed to copy files into C:\ProgramData.
+5. Wait for "Installation complete", then press any key to close the window.
+6. Open OBS Studio.
+
+Virtual Recorder appears as a dock. If it is hidden, choose
+Tools > Open Virtual Recorder.
+
+Install-Windows.bat only copies the "virtuedit-obs" folder to:
+
+   C:\ProgramData\obs-studio\plugins\
+
+You can open the file in Notepad to check.
+
+
+Install by hand (if you prefer not to run the .bat file)
+--------------------------------------------------------
+
+1. Quit OBS Studio completely.
+2. Extract the ZIP file.
+3. Copy the "virtuedit-obs" folder to:
+
+      C:\ProgramData\obs-studio\plugins\
+
+   (Paste this path into File Explorer. If the "plugins" folder does not
+   exist, create it.)
+4. Open OBS Studio.
+
+When finished, this file should exist:
+
+   C:\ProgramData\obs-studio\plugins\virtuedit-obs\bin\64bit\virtuedit-obs.dll
+
+
+If Windows shows a warning
+--------------------------
+
+"Windows protected your PC" (blue screen): click "More info" first.
+A "Run anyway" button then appears. Click it.
+This appears because the file is new and not yet widely downloaded.
+
+"Open File - Security Warning" when running the .bat: choose Run.
+
+If a file is blocked, right-click the ZIP, choose Properties, check
+Unblock, click OK, then extract the ZIP again.
+
+
+Update
+------
+
+1. Quit OBS Studio completely.
+2. Extract the new ZIP.
+3. Run Install-Windows.bat again (or copy the folder by hand).
+
+The old version is replaced.
+
+
+Uninstall
+---------
+
+1. Quit OBS Studio completely.
+2. Double-click Uninstall-Windows.bat,
+   or delete C:\ProgramData\obs-studio\plugins\virtuedit-obs by hand.
+
+Your recordings are not removed.
+
+
+Help
+----
+
+If the dock does not appear, or the installer reports an error, make sure
+OBS is fully closed and try again. Still stuck? Email help@virtuedit.com
+and attach your OBS log (OBS > Help > Log Files).
+
+License: GNU GPL v2 or later. See LICENSE.txt and SOURCE_CODE.txt in the
+virtuedit-obs folder.
