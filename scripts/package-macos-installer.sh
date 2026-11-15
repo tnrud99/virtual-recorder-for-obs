@@ -26,12 +26,35 @@ esac
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/virtuedit-recorder-installer.XXXXXX")"
 trap 'rm -rf -- "$work_dir"' EXIT
 
-# Reuse the ZIP pipeline's bundle layout, license files, and binary checks.
-PACKAGE_ROOT="$work_dir/bundle" \
-  MACOS_ARCHITECTURE="$MACOS_ARCHITECTURE" \
-  STAGE_DIR="$work_dir/stage" \
-  ZIP_PATH="$work_dir/plugin.zip" \
-  bash "$ROOT_DIR/scripts/package-macos.sh"
+if [[ -n "${PLUGIN_ZIP:-}" ]]; then
+  # Sign a plugin ZIP that CI built from the public source (the
+  # VirtuEdit-OBS-Plugin-macOS-<arch> artifact) instead of building here.
+  if [[ ! -f "$PLUGIN_ZIP" ]]; then
+    echo "PLUGIN_ZIP not found: $PLUGIN_ZIP" >&2
+    exit 1
+  fi
+  mkdir -p "$work_dir/stage"
+  ditto -x -k "$PLUGIN_ZIP" "$work_dir/stage"
+  expected_os="${MACOS_DEPLOYMENT_TARGET:-12.0}"
+  for binary in Contents/MacOS/virtuedit-obs Contents/Resources/ffmpeg; do
+    binary_path="$work_dir/stage/virtuedit-obs.plugin/$binary"
+    archs="$(lipo -archs "$binary_path" 2>/dev/null || true)"
+    minos="$(vtool -show-build "$binary_path" 2>/dev/null | awk '/minos/ { print $2; exit }')"
+    if [[ "$archs" != "$MACOS_ARCHITECTURE" || "$minos" != "$expected_os" ]]; then
+      echo "$binary in PLUGIN_ZIP is '$archs' (minimum macOS '$minos');" \
+        "expected $MACOS_ARCHITECTURE (minimum macOS $expected_os)." >&2
+      exit 1
+    fi
+  done
+else
+  # Build here, reusing the ZIP pipeline's bundle layout, license files, and
+  # binary checks.
+  PACKAGE_ROOT="$work_dir/bundle" \
+    MACOS_ARCHITECTURE="$MACOS_ARCHITECTURE" \
+    STAGE_DIR="$work_dir/stage" \
+    ZIP_PATH="$work_dir/plugin.zip" \
+    bash "$ROOT_DIR/scripts/package-macos.sh"
+fi
 bundle="$work_dir/stage/virtuedit-obs.plugin"
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$bundle/Contents/Info.plist")"
 minimum_os="${MACOS_DEPLOYMENT_TARGET:-12.0}"

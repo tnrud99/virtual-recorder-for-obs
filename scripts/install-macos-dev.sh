@@ -101,7 +101,16 @@ if [[ -n "${FFMPEG_BIN:-}" ]]; then
     echo "Bundled FFmpeg does not support $MACOS_ARCHITECTURE." >&2
     exit 1
   fi
-  ffmpeg_version="$("$FFMPEG_BIN" -version)"
+  # Read the build configuration. A binary for another architecture cannot run
+  # here (an x86_64 build on Apple Silicon without Rosetta), so fall back to the
+  # configure line FFmpeg embeds in the binary.
+  if ! ffmpeg_version="$("$FFMPEG_BIN" -version 2>/dev/null)"; then
+    ffmpeg_version="$(strings -a "$FFMPEG_BIN" | grep -m1 -e '--prefix=' || true)"
+    if [[ -z "$ffmpeg_version" ]]; then
+      echo "  ERROR: could not read the FFmpeg build configuration: $FFMPEG_BIN"
+      exit 1
+    fi
+  fi
   if [[ "$ffmpeg_version" == *--enable-gpl* ]]; then
     if [[ "${REQUIRE_LGPL_FFMPEG:-0}" == "1" ]]; then
       echo "  ERROR: Selected ffmpeg was built with --enable-gpl: $FFMPEG_BIN"

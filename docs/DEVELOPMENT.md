@@ -169,11 +169,28 @@ For public distribution, use `--release` with
 and installer, notarizes the package, and verifies it before writing it to
 `release/macos/`.
 
-For an Intel package, set `MACOS_ARCHITECTURE=x86_64`, point `OBS_LIB_DIR`
-at the Intel OBS Studio app's `Contents/Frameworks`, and set `QT_PREFIX`
-to the OBS-matched Intel Qt package. Use `BUILD_FFMPEG=1` to build the
-matching Intel FFmpeg. Intel builds and FFmpeg outputs use separate folders
-under `build/`.
+Release packages are made from the bundles CI builds, so the shipped binaries
+come from the public source and pinned dependencies and carry no local paths.
+CI builds both `arm64` and `x86_64` (Intel is cross-compiled on Apple Silicon).
+Download the `VirtuEdit-OBS-Plugin-macOS-arm64` and `-x86_64` artifacts from
+the run for the release commit, then sign, package and notarize each one:
+
+```bash
+PLUGIN_ZIP=/path/to/VirtuEdit-OBS-Plugin-macOS-arm64.zip MACOS_ARCHITECTURE=arm64 \
+  VIRTUEDIT_CODESIGN_IDENTITY="Developer ID Application: virtuedit Inc. (W9K9R7S6N4)" \
+  VIRTUEDIT_INSTALLER_IDENTITY="Developer ID Installer: virtuedit Inc. (W9K9R7S6N4)" \
+  VIRTUEDIT_NOTARY_KEYCHAIN_PROFILE=VirtuEDIT-Notary \
+  scripts/package-macos-installer.sh --release
+```
+
+Repeat with the `x86_64` ZIP and `MACOS_ARCHITECTURE=x86_64`. The script
+checks each binary's architecture and minimum macOS before signing.
+
+To build an Intel package locally instead, set `MACOS_ARCHITECTURE=x86_64`,
+point `OBS_LIB_DIR` at the Intel OBS Studio app's `Contents/Frameworks`, and
+set `QT_PREFIX` to the OBS-matched Qt package (universal or x86_64). Use
+`BUILD_FFMPEG=1` to build the matching Intel FFmpeg. Intel builds and FFmpeg
+outputs use separate folders under `build/`.
 
 For development builds installed directly into OBS:
 
