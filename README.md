@@ -84,8 +84,9 @@ install it the same way as before; it replaces the old one.
 
 ## Uninstall
 
-- **macOS:** quit OBS and delete
-  `/Library/Application Support/obs-studio/plugins/virtuedit-obs.plugin`.
+- **macOS:** quit OBS and move
+  `~/Library/Application Support/obs-studio/plugins/virtuedit-obs.plugin`
+  to the Trash (in Finder, **Go > Go to Folder** and paste the path).
 - **Windows:** quit OBS and double-click **Uninstall-Windows.bat**, or delete
   `C:\ProgramData\obs-studio\plugins\virtuedit-obs`.
 

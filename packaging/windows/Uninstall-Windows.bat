@@ -59,7 +59,8 @@ if exist "%DEST_DIR%" (
     exit /b 1
 )
 
-echo Uninstall complete.
+echo Uninstall complete. Your recordings were not removed.
 echo.
-pause
+echo Press any key to close this window.
+pause >nul
 exit /b 0

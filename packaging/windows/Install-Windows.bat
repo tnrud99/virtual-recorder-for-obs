@@ -87,8 +87,12 @@ if %ROBOCOPY_EXIT% GEQ 8 (
 
 echo Installation complete.
 echo.
-echo Open OBS Studio. Virtual Recorder should appear in OBS.
-echo If it is not visible, check the OBS Docks or Tools menu.
+echo Next: open OBS Studio. Virtual Recorder appears as a dock.
+echo If it is hidden, choose Tools ^> Open Virtual Recorder.
 echo.
-pause
+echo To update later, run the new Install-Windows.bat.
+echo To uninstall, run Uninstall-Windows.bat. Your recordings are kept.
+echo.
+echo Press any key to close this window.
+pause >nul
 exit /b 0

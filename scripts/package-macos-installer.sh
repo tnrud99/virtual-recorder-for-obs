@@ -72,17 +72,53 @@ pkgbuild --root "$work_dir/stage" --component-plist "$work_dir/components.plist"
   "$work_dir/plugin.pkg"
 
 mkdir "$work_dir/resources"
-cat > "$work_dir/resources/Welcome.txt" <<'WELCOME'
-Virtual Recorder for React Central
+# Shown on the first and last Installer screens. The Distribution below
+# installs into the current user's home, so the plugin lands in
+# ~/Library/Application Support/obs-studio/plugins/.
+cat > "$work_dir/resources/Welcome.txt" <<WELCOME
+Virtual Recorder for React Central $version
 
-Quit OBS Studio before installing. After installation, reopen OBS Studio.
+An OBS Studio plugin that records your reaction, the YouTube video
+you react to, and a sync file in one session folder.
+
+Before you continue:
+- Quit OBS Studio. If it is open, the installer will ask you to close it.
+- Requires OBS Studio 32.1.2 and macOS $minimum_os or later.
+
+The plugin is installed for your user account only.
+
+Virtual Recorder is an independent third-party plugin for OBS Studio.
+It is not developed or endorsed by the OBS Project.
 WELCOME
+
+cat > "$work_dir/resources/Conclusion.txt" <<'CONCLUSION'
+Virtual Recorder is installed.
+
+Next
+1. Open OBS Studio.
+2. Virtual Recorder appears as a dock.
+   If it is hidden, choose Tools > Open Virtual Recorder.
+
+Update
+Quit OBS Studio and open the new installer. It replaces this version.
+
+Uninstall
+Quit OBS Studio, then move this folder to the Trash:
+~/Library/Application Support/obs-studio/plugins/virtuedit-obs.plugin
+(In Finder, choose Go > Go to Folder and paste the path.)
+Your recordings are not removed.
+
+Help: help@virtuedit.com
+License (GPL-2.0-or-later) and source code:
+https://github.com/tnrud99/virtual-recorder-for-obs
+CONCLUSION
 
 cat > "$work_dir/Distribution.xml" <<DIST
 <?xml version="1.0" encoding="UTF-8"?>
 <installer-gui-script minSpecVersion="2">
   <title>Virtual Recorder for React Central</title>
   <welcome file="Welcome.txt" mime-type="text/plain"/>
+  <conclusion file="Conclusion.txt" mime-type="text/plain"/>
   <options customize="never" hostArchitectures="$MACOS_ARCHITECTURE" require-scripts="false"/>
   <domains enable_anywhere="false" enable_currentUserHome="true" enable_localSystem="false"/>
   <volume-check><allowed-os-versions><os-version min="$minimum_os"/></allowed-os-versions></volume-check>
