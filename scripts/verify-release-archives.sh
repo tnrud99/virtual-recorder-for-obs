@@ -150,7 +150,7 @@ check_windows_zip()
   require_zip_entry "$list_file" "virtuedit-obs/data/ffmpeg.exe" "Windows bundled ffmpeg"
   require_zip_entry "$list_file" "virtuedit-obs/data/locale/en-US.ini" "Windows en-US locale"
   require_zip_entry "$list_file" "virtuedit-obs/data/locale/ko-KR.ini" "Windows ko-KR locale"
-  require_zip_entry "$list_file" "virtuedit-obs/INSTALL.txt" "Windows packaged install guide"
+  forbid_zip_entry "$list_file" "virtuedit-obs/INSTALL.txt" "duplicate install guide (use How to Install.txt)"
   require_zip_entry "$list_file" "virtuedit-obs/LICENSE.txt" "Windows license"
   require_zip_entry "$list_file" "virtuedit-obs/THIRD_PARTY_LICENSES.txt" "Windows third-party licenses"
   require_zip_entry "$list_file" "virtuedit-obs/SOURCE_CODE.txt" "Windows source information"

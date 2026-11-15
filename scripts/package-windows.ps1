@@ -47,7 +47,6 @@ Copy-Item (Join-Path $RootDir "SOURCE_CODE.md") (Join-Path $PackageDir "SOURCE_C
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "licenses") | Out-Null
 Copy-Item (Join-Path $RootDir "licenses/LGPL-2.1.txt") (Join-Path $PackageDir "licenses/LGPL-2.1.txt")
 Copy-Item (Join-Path $RootDir "licenses/LGPL-3.0.txt") (Join-Path $PackageDir "licenses/LGPL-3.0.txt")
-Copy-Item (Join-Path $RootDir "packaging/windows/INSTALL.txt") (Join-Path $PackageDir "INSTALL.txt")
 
 if ($FfmpegExe) {
     if (!(Test-Path $FfmpegExe)) {

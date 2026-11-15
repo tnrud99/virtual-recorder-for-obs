@@ -46,7 +46,7 @@ jobs:
       OBS_MACOS_SHA256: 2aeb3aaa99544fefd557f10ac6550e73df71540dd57528b2a1e6f39a55ebacfb
       OBS_DEPS_VERSION: 2025-08-23
       OBS_QT_MACOS_SHA256: ed70bb04a5ffc4c820d691e7f1d9913462bc4e018383e98c5548876f6dec0304
-      MACOS_DEPLOYMENT_TARGET: 12.0
+      MACOS_DEPLOYMENT_TARGET: "12.0"
     steps:
       - uses: actions/checkout@v4
 

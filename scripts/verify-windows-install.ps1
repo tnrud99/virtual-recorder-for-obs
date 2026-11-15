@@ -18,7 +18,6 @@ $DataDir = Join-Path $PluginDir "data"
 $FfmpegExe = Join-Path $DataDir "ffmpeg.exe"
 $EnglishLocale = Join-Path $DataDir "locale\en-US.ini"
 $KoreanLocale = Join-Path $DataDir "locale\ko-KR.ini"
-$InstallDoc = Join-Path $PluginDir "INSTALL.txt"
 $License = Join-Path $PluginDir "LICENSE.txt"
 $ThirdPartyLicenses = Join-Path $PluginDir "THIRD_PARTY_LICENSES.txt"
 $SourceCodeInfo = Join-Path $PluginDir "SOURCE_CODE.txt"
@@ -43,9 +42,6 @@ if (!(Test-Path -LiteralPath $EnglishLocale -PathType Leaf)) {
 }
 if (!(Test-Path -LiteralPath $KoreanLocale -PathType Leaf)) {
     Fail "ko-KR locale missing: $KoreanLocale"
-}
-if (!(Test-Path -LiteralPath $InstallDoc -PathType Leaf)) {
-    Fail "INSTALL.txt missing: $InstallDoc"
 }
 if (!(Test-Path -LiteralPath $License -PathType Leaf)) {
     Fail "GPL license missing: $License"
